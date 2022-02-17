@@ -16,7 +16,7 @@ def get_anomalous_docs(escl, site_name):
     :rtype:
     """
     anomalous_docs = []
-    search_param = {'query': {'match': {'anomtype': 'Unusual Access Location For a User'}}}
+    search_param = {"query": {"term": {"anomtype": {"value": "Unusual Access Location For a User"}}}}
     anomalous_locations_index = 'ml_event_v1'
 
     for doc in scan(client=escl, index=anomalous_locations_index, query=search_param):

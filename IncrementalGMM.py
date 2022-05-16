@@ -1,36 +1,49 @@
+"""
+
+Created in May 2022
+@author: Max Watson
+IncremenetalGMM
+"""
+
 import numpy as np
 import math
 import traceback
 import matplotlib.pyplot as plot
 import random
+import matplotlib as mpl
 
 
 class IncrementalGMM(object):
     """
-
+        Reference IGMM Paper*
     """
 
     # def __init__(self, x_vector, y_vector, categorical_data=False, binary_data=False, ordered_pairs=True, weighted=False, validate_input=True):
-    def __init__(self, x_val, y_val, **kwargs):
+    def __init__(self, x_val, y_val, vector_length = 2, starting_data = [], **kwargs):
+        #TODO add better comments and clearer variable names
         # accumulators , and standard base initialization
-        self.vector_length = 2
+        self.feature_dimension = vector_length # Feature set dimension
+
         self.mus = {0:np.array([x_val,y_val])}
-        self.sigmaInverse = 1. # Need better initialization for sigma here
-        self.sigmas = {0:np.array([[(x_val+y_val)/(2+x_val),0],[0,(x_val+y_val)/(2+y_val)]])}  # sigma should be representative of only a part of the data stream
+        if len(starting_data) == 0:
+            self.sigmaInverse = 1
+        else:
+            self.sigmaInverse = np.std(starting_data) ** 2 ** -1
+        #TODO implement init sigma function
         self.covariance_determinants = {0:np.linalg.det(self.sigmas[0])}
         self.component_probabilities = {0:1.}
-        self.ages = {0:1}
+        self.ages = {0:1} # Represents the number of points in each component
         self.accumulators = {0:1.}
-        self.alphas = {0:1.}
-        self.corresponding_data = {0:[np.copy(self.mus[0])]}
-        self.K = 1
+        self.alphas = {0:(self.sigmaInverse * np.identity(self.feature_dimension))} #
+        self.corresponding_data = {0: np.array([self.mus[0]])} # Initialize corresponding_data of cluster 0 to first mu
+        self.K = 0 # Set the current number of components to 1
         self.KMax = 10
-        self.fig_num = 1
+        self.fig_num = 2
         self.mahalanobisMax = 6
         self.printing = False
         self.converged = False # when model converges or fitted, it is True
         self.model_param = None # for persistence
-        self.state = 'COLLECTING' # READY_TO_FIT, 'FITTED', 'EXPIRED'
+        self.state = 'COLLECTING' # READY_TO_FIT, 'FITTED', 'EXPIRED', cluster-wise states regarding merge/split
         self.unclassified_points = []
         pass
 
@@ -45,7 +58,7 @@ class IncrementalGMM(object):
         for j in range(self.K):
             dist = self.mahalanobis(point, self.mus[j], self.alphas[j])
             if dist < self.mahalanobisMax:
-                self.update(j,point)
+                self.update(j, point)
                 updated = True
         if not updated and self.remainingK() > 0:
             self.create(point)
@@ -54,7 +67,10 @@ class IncrementalGMM(object):
         pass
 
     def add_outlier(self, point):
-        self.unclassified_points.append(point)
+        if len(self.unclassified_points) == 0:
+            self.unclassified_points = np.array([point])
+        else:
+            self.unclassified_points = np.append(self.unclassified_points, np.array([point]), 0)
 
     def remainingK(self):
         return self.KMax - self.K
@@ -68,16 +84,60 @@ class IncrementalGMM(object):
         #return self.converge
 
     def fit(self, data_stream):
+        #TODO require number of points to be considered fitted
+        #TODO minimum number of samples to fit
         for i in range(len(data_stream)):
             self.add(data_stream[i][0], data_stream[i][1])
         self.plot()
 
-    def merge_clusters(self):
-        pass
+    def merge_pass(self):
+        done_merging = False
+        while not done_merging:
+            print(self.K)
+            done_merging = True
+            if self.K < 3:
+                return
+            for i in range(self.K):
+                if i >= self.K:
+                    break
+                for j in range(i):
+                    if j >= self.K or i >= self.K:
+                        break
+                    dist1 = self.mahalanobis(self.mus[i], self.mus[j], self.alphas[j])
+                    dist2 = self.mahalanobis(self.mus[j], self.mus[i], self.alphas[i])
+                    dist = (dist1 + dist2) / 2
+                    if dist < self.mahalanobisMax:  # and dist1 < 0.1 * maxDist:
+                        points = self.corresponding_data[j].copy() # look at all points in j
+                        for x in self.corresponding_data[i]:
+                            if not self.arr_in_list(x, self.corresponding_data[j]):
+                                points = np.append(points, np.array([x]), 0)
+                        done_merging = False
+                        random.shuffle(points)
+                        self.merge_clusters(points, i, j)
+                        self.K -= 1
+
+    def merge_clusters(self, points, j1, j2):
+        self.remove_cluster(j1)
+        self.K -= 1
+        self.remove_cluster(j2)
+        self.K -= 1
+        self.corresponding_data[self.K] = np.array([points[0]])
+        self.create(points[0])
+
+        for i in range(1, len(points)):
+            dist = self.mahalanobis(points[i], self.mus[self.K - 1], self.alphas[self.K - 1])
+            if dist < self.mahalanobisMax:
+                self.corresponding_data[self.K - 1] = np.append(self.corresponding_data[self.K - 1], np.array([points[i]]), 0)
+                # ZDict[i].append(getZScores(X[mergeX[i]], mus[K - 1], np.linalg.inv(alphas[K - 1]), dist))
+                self.update(self.K - 1, points[i])
+
+            else:
+                self.add_outlier(points[i])
 
     def split_clusters(self, j):
         pass
 
+    #Does not change K
     def remove_cluster(self, j):
         num_components = len(self.mus)
         iterables = [self.accumulators, self.ages, self.alphas, self.component_probabilities, self.corresponding_data,\
@@ -128,50 +188,47 @@ class IncrementalGMM(object):
         colors = ['r', 'b', 'y', 'k', 'm', 'c']
         for i in range(self.K):
             plot.figure(self.fig_num)
-            A = self.corresponding_data[i]
-
-            Xs_to_plot = A[:][0]
-            Ys_to_plot = A[:][1]
-            plot.scatter(Xs_to_plot, Ys_to_plot, c=colors[i % 6])
+            plot.scatter(self.corresponding_data[i][:, 0], self.corresponding_data[i][:, 1], c = colors[i % 6])
             plot.scatter((self.mus[i][0]), (self.mus[i][1]), c='g')
-        # #getOutliers(self.corresponding_data, K)
-        # A = self.corresponding_data[-1]
-        # Xs_to_plot = A[:][0]
-        # Ys_to_plot = A[:][1]
-        # #plot.scatter(Xs_to_plot, Ys_to_plot, c='c')
         plot.show()
         pass
 
     def model_params(self):
         pass
 
-
-    # function to calculate mahalanobis distance
     def mahalanobis(self, x, mu, alpha):
+        # Function to calculate mahalanobis distance
         # alpha is the precision matrix ( inverse of co-variance matrix)
         try:
             return abs(np.matmul((x - mu).transpose(), np.matmul(alpha, x - mu)))
         except ValueError:
             print("alpha = {}, x = {}, mu = {}".format(alpha, x, mu))
 
+    def arr_in_list(self, arr, arr_list):
+        for arr_2 in arr_list:
+            if np.array_equal(arr, arr_2):
+                return True
+        return False
+
+    # Increments K by 1
     def create(self, x):
         K = self.K
         self.accumulators[K] = 1.
         self.ages[K] = 1
-        self.alphas[K] = self.sigmaInverse * np.identity(self.vector_length)
+        self.alphas[K] = self.sigmaInverse * np.identity(self.feature_dimension)
         self.component_probabilities[K] = 1 / sum(self.accumulators.values())
         self.covariance_determinants[K] = np.linalg.det(self.alphas[K]) ** -1
         self.mus[K] = np.copy(x)
-        self.corresponding_data[K] = {K:[np.copy((self.mus[K]))]}
+        self.corresponding_data[K] = np.array([(self.mus[K])])
         self.K += 1
 
     # update a component j using the posterior probabilities of data point x
     # Algorithm 2 update
     def update(self, j, x):
-        self.corresponding_data[j].append(np.copy(x))
+        self.corresponding_data[j] = np.append(self.corresponding_data[j], np.array([x]), 0)
         dist = (self.mahalanobis(x, self.mus[j], self.alphas[j]))
 
-        pxj = 1 / ((2 * math.pi) ** (self.vector_length / 2) * math.sqrt(self.covariance_determinants[j]))
+        pxj = 1 / ((2 * math.pi) ** (self.feature_dimension / 2) * math.sqrt(self.covariance_determinants[j]))
         pxj *= math.exp(-0.5 * dist)  #
 
         if self.printing:
@@ -180,7 +237,7 @@ class IncrementalGMM(object):
         pjx = pxj * self.component_probabilities[j]  #
         totProbs = 0
         for i in range(self.K):
-            pxi = 1 / ((2 * math.pi) ** (self.vector_length / 2) * math.sqrt(self.covariance_determinants[i]))
+            pxi = 1 / ((2 * math.pi) ** (self.feature_dimension / 2) * math.sqrt(self.covariance_determinants[i]))
             pxi *= math.exp(-0.5 * dist)  #
             totProbs += pxi * self.component_probabilities[i]  #
 
@@ -207,7 +264,7 @@ class IncrementalGMM(object):
 
         oldAlpha = self.alphas[j]
 
-        inputLen = self.vector_length
+        inputLen = self.feature_dimension
         e = np.ndarray([inputLen, 1])
         for i in range(inputLen):
             e[i, 0] = ej[i]
@@ -219,7 +276,7 @@ class IncrementalGMM(object):
 
         self.component_probabilities[j] = self.accumulators[j] / sum(self.accumulators.values())
 
-        self.covariance_determinants[j] = (1 - weight) ** self.vector_length * self.covariance_determinants[j] * (
+        self.covariance_determinants[j] = (1 - weight) ** self.feature_dimension * self.covariance_determinants[j] * (
                 1 + (weight * (1 + weight * (weight - 3))) / (1 - weight) * np.matmul(ej.transpose(),
                                                                                       np.matmul(oldAlpha, ej)))
         pass
@@ -255,14 +312,48 @@ def generate_sample_data():
         if distant:
             count += 1
     pass
+    splot = plot.subplot(1, 1, 1)
+
+    Xs = [[], [], [], [], []]
+    Ys = [[], [], [], [], []]
+    colors = ['r', 'b', 'k', 'y', 'm']
+
+    for i in range(len(X)):
+        index = startingCorrespondences[i]
+        Xs[index].append(X[i, 0])
+        Ys[index].append(X[i, 1])
+    for i in range(5):
+        # plot.scatter(Xs[i], Ys[i], c =colors[i])
+        v, w = np.linalg.eigh(sigmas[i])
+        angle = np.arctan2(w[0][1], w[0][0])
+        angle = 180.0 * angle / np.pi  # convert to degree
+        Xs_to_plot = Xs[i]
+        Ys_to_plot = Ys[i]
+        plot.scatter(Xs_to_plot, Ys_to_plot, c=colors[i])
+        plot.scatter((mus[i][0]), (mus[i][1]), c='g')
+
+        ell = mpl.patches.Ellipse(mus[i], v[0], v[1], 180.0 + angle, color=colors[i % 5])
+        ell.set_clip_box(splot.bbox)
+
+        ell.set_alpha(0.5)
+        splot.add_artist(ell)
     return [X, starting_mus, sigmas, startingCorrespondences, maxZ, count/numvectors]
 
 
 def main():
+    #TODO merge should require state
+    #TODO user should not have to call fit
+    #TODO implement a run function that behaves dependent on state
     data = generate_sample_data()
-    X = data[0]
-    IGMM = IncrementalGMM(X[0][0], X[0][1])
-    IGMM.fit(X[1,:])
-    IGMM.plot()
-
+    data_stream = data[0]
+    iGMM = IncrementalGMM(data_stream[0][0], data_stream[0][1])
+    iGMM.fit(data_stream[1:])
+    #iGMM.merge_pass()
+    iGMM.plot()
+    val = 0
+    for i in range(iGMM.K):
+        print(len(iGMM.corresponding_data[i]))
+        val += len(iGMM.corresponding_data[i])
+    print(val)
+    print(len(iGMM.unclassified_points))
 main()

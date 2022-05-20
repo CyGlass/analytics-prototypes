@@ -2,7 +2,7 @@
 
 Created in May 2022
 @author: Max Watson
-IncremenetalGMM
+IncrementalGMM
 """
 
 import numpy as np
@@ -11,7 +11,9 @@ import traceback
 import matplotlib.pyplot as plot
 import random
 import matplotlib as mpl
+from numpy import ndarray
 
+# TODO adjust simulate code to use as main to call IGMM iteratively then predict once fitted
 
 class IncrementalGMM(object):
     """
@@ -19,9 +21,6 @@ class IncrementalGMM(object):
     """
 
     def __init__(self, x_val, y_val, z_val = [],vector_length = 2, starting_data = [], **kwargs):
-        #TODO add better comments and clearer variable names
-        # accumulators , and standard base initialization
-
         # Start by initializing IGMM data structures and variables
         self.feature_dimension = vector_length # Feature set dimension
 
@@ -38,14 +37,18 @@ class IncrementalGMM(object):
         self.unclassified_points = [] # list to keep track of unclassified points
 
         self.K = 0  # Set the current number of components to 1
-        self.KMax = 10  # Set the maximum number of components to 10
-        self.mahalanobisMax = 6  # Set the threshold for the mahalanobis distance to 6 (85% of chi^2, 4 DoF)
+        self.KMax = 5  # Set the maximum number of components to 10
+        self.mahalanobisMax = 10  # Set the threshold for the mahalanobis distance to 6 (85% of chi^2, 4 DoF)
         # TODO allow for initialization of data to fit
         self.data = np.array([[]])  # Begin with no data to fit
         self.min_data = 500  # minimum number of points needed to collect before fitting
         self.fig_num = 2  # Start fig_num at 2 to offset figure for generated data
+        self.scaling = 0.2
 
         self.state = 'COLLECTING' # READY_TO_FIT, 'FITTED', 'EXPIRED', cluster-wise states regarding the merge/split
+        # TODO remove readytofit state
+        # TODO remove loop within class so that main will feature the loop to call
+        self.classification_array = []
 
         # These are currently unused
         # self.printing = False  # Variable to track if printing in functions, not currently used
@@ -57,7 +60,7 @@ class IncrementalGMM(object):
         if len(starting_data) == 0:
             return 1
         else:
-            return np.std(starting_data) ** 2 ** -1
+            return np.std(starting_data) ** 2 ** -1 * self.scaling
 
     # Initialize mu to a ndarray of length 2 or 3, depending on whether a z value was provided
     def mu_init(self, x_val, y_val, z_val):
@@ -69,18 +72,23 @@ class IncrementalGMM(object):
     def run(self, parameters):
         # Function to call functions based on current state
         if self.state == "COLLECTING":
-            self.add_data(parameters)
+            if len(parameters) > 0:
+                self.add_data(parameters)
         elif self.state == "READY_TO_FIT":
-            self.fit(self.data_stream)
+            if len(parameters) > 0:
+                self.add_data(parameters)
+            self.fit(self.data)
         elif self.state == "FITTED":
-            pass  # self.predict(parameters)
+            self.predict(parameters)
         else:
             pass
-    # TODO add a function to predict using input data
 
     # Function to append data to self.data, and reevaluate whether the IGMM is ready to fit
     def add_data(self, data_stream):
-        self.data = np.append(self.data, data_stream, 0)
+        if len(self.data[0]) == 0:
+            self.data = data_stream
+        else:
+            self.data = np.append(self.data, data_stream, 0)
         if len(self.data) > self.min_data:
             self.state = "READY_TO_FIT"
 
@@ -124,11 +132,45 @@ class IncrementalGMM(object):
         """
         return self.state
 
+    # Function to return an array of the most likely cluster for each data point
+    def predict(self, data_stream):
+        self.classification_array = []
+        classifications: ndarray = np.ndarray([len(data_stream)])
+        probs = np.ndarray([self.K])
+        for i in range(len(data_stream)):
+            pxj_arr = []
+            for j in range(self.K):
+                dist = self.mahalanobis(data_stream[i], self.mus[j], self.alphas[j])
+                pxj = 1 / ((2 * math.pi) ** (self.feature_dimension / 2) * math.sqrt(self.covariance_determinants[j]))
+                pxj *= math.exp(-0.5 * dist)
+                pxj *= self.component_probabilities[j]
+                pxj_arr.append(pxj)
+            px = sum(pxj_arr)
+            for j in range(self.K):
+                probs[j] = (pxj_arr[j] * self.component_probabilities[j] / px)
+
+            max_index = -1
+            max_val = 0.
+            for j in range(self.K):
+                if probs[j] > max_val:
+                    max_index = j
+                    max_val = probs[j]
+            classifications[i] = max_index
+            self.classification_array.append(max_index)
+            if i == 5:
+                print(self.classification_array)
+        print(len(self.classification_array))
+
+    # Function to get the classification array from most recent call of predict
+    def get_classification_array(self):
+        return self.classification_array
+
     # Function to fit the IGMM, if it is ready
     def fit(self, data_stream):
         self.add_data(data_stream)
         if not self.state == "READY_TO_FIT":
             return
+        # TODO dim
         for i in range(len(self.data)):
             self.add(self.data[i][0], self.data[i][1])
         self.state = "FITTED"
@@ -150,7 +192,7 @@ class IncrementalGMM(object):
                     dist1 = self.mahalanobis(self.mus[i], self.mus[j], self.alphas[j])
                     dist2 = self.mahalanobis(self.mus[j], self.mus[i], self.alphas[i])
                     dist = (dist1 + dist2) / 2
-                    if dist < self.mahalanobisMax:  # and dist1 < 0.1 * maxDist:
+                    if dist < self.mahalanobisMax * 0.1:  # and dist1 < 0.1 * maxDist:
                         points = self.corresponding_data[j].copy() # look at all points in j
                         for x in self.corresponding_data[i]:
                             if not self.arr_in_list(x, self.corresponding_data[j]):
@@ -290,8 +332,11 @@ class IncrementalGMM(object):
         pjx = pxj * self.component_probabilities[j]  #
         totProbs = 0
         for i in range(self.K):
-            pxi = 1 / ((2 * math.pi) ** (self.feature_dimension / 2) * math.sqrt(self.covariance_determinants[i]))
-            pxi *= math.exp(-0.5 * dist)  #
+            try:
+                pxi = 1 / ((2 * math.pi) ** (self.feature_dimension / 2) * math.sqrt(self.covariance_determinants[i]))
+                pxi *= math.exp(-0.5 * dist)  #
+            except ValueError:
+                pxi = 0
             totProbs += pxi * self.component_probabilities[i]  #
 
         if totProbs == 0:
@@ -387,18 +432,57 @@ def generate_sample_data():
 
 # Function called to run the GMM
 def main():
-    #TODO merge should require state
-    #TODO restructure so run is called instead of fit
+    # Generate some data
     data = generate_sample_data()
     data_stream = data[0]
-    iGMM = IncrementalGMM(data_stream[0][0], data_stream[0][1])
-    iGMM.fit(data_stream[1:])
-    #iGMM.merge_pass()
-    iGMM.plot()
-    val = 0
-    for i in range(iGMM.K):
-        print(len(iGMM.corresponding_data[i]))
-        val += len(iGMM.corresponding_data[i])
-    print(val)
-    print(len(iGMM.unclassified_points))
+
+    # Initialize the IGMM with starting data
+    igmm = IncrementalGMM(data_stream[0][0], data_stream[0][1], starting_data=data_stream[1:200])
+
+    # State will be "COLLECTING"
+    print(igmm.get_state())
+
+    # Run to add data points
+    igmm.run(data_stream[200:400])
+
+    # State will be "COLLECTING" since data points collected are < 500
+    print(igmm.get_state())
+
+    # Run to add more data points
+    igmm.run(data_stream[400:600])
+
+    # State will be "READY_TO_FIT" since data points collected exceed 500
+    print(igmm.get_state())
+
+    # Run to fit to the data
+    igmm.run(data_stream[600:800])
+
+    # State will be "FITTED"
+    print(igmm.get_state())
+
+    # Merge clusters and plot them
+    igmm.merge_pass()
+    igmm.plot()
+
+    # Some printed stats at the end for convenience
+    # val = 0
+    # for i in range(igmm.K):
+    #     print(len(igmm.corresponding_data[i]))
+    #     val += len(igmm.corresponding_data[i])
+    # print(val)
+    # print(len(igmm.unclassified_points))
+
+    # We can run again to get the predictions
+    igmm.run(data_stream[800:1000])
+    print(igmm.get_state())
+    igmm.run(data_stream[1000:1200])
+
+    # State is still "FITTED"
+    print(igmm.get_state())
+
+    # We can now see the predictions
+    print("The Predictions are: ")
+    print(igmm.get_classification_array())
+    igmm.plot()
+
 main()

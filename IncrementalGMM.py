@@ -5,13 +5,21 @@ Created in May 2022
 IncrementalGMM
 """
 
-import numpy as np
 import math
-import traceback
-import matplotlib.pyplot as plot
 import random
+import traceback
+
 import matplotlib as mpl
+import matplotlib.pyplot as plot
+import matplotlib.pyplot as plt
+import numpy as np
 from numpy import ndarray
+import pandas
+import folium
+
+from sklearn.preprocessing import MinMaxScaler
+
+
 
 # TODO adjust simulate code to use as main to call IGMM iteratively then predict once fitted
 
@@ -23,6 +31,8 @@ class IncrementalGMM(object):
     def __init__(self, x_val, y_val, z_val = [],vector_length = 2, starting_data = [], **kwargs):
         # Start by initializing IGMM data structures and variables
         self.feature_dimension = vector_length # Feature set dimension
+        self.scaling = 0.2
+
 
         self.mus = {0:self.mu_init(x_val, y_val, z_val)}  # Initialize mus dictionary for IGMM
         self.sigmaInverse = self.sigma_init(starting_data)  # Initialize sigmaInverse to create precision matrix dict
@@ -38,18 +48,20 @@ class IncrementalGMM(object):
 
         self.K = 0  # Set the current number of components to 1
         self.KMax = 5  # Set the maximum number of components to 10
-        self.mahalanobisMax = 10  # Set the threshold for the mahalanobis distance to 6 (85% of chi^2, 4 DoF)
+        self.mahalanobisMax = 4  # Set the threshold for the mahalanobis distance to 6 (85% of chi^2, 4 DoF)
         # TODO allow for initialization of data to fit
         self.data = np.array([[]])  # Begin with no data to fit
+
         self.min_data = 500  # minimum number of points needed to collect before fitting
         self.fig_num = 2  # Start fig_num at 2 to offset figure for generated data
-        self.scaling = 0.2
 
         self.state = 'COLLECTING' # READY_TO_FIT, 'FITTED', 'EXPIRED', cluster-wise states regarding the merge/split
         # TODO remove readytofit state
         # TODO remove loop within class so that main will feature the loop to call
         self.classification_array = []
 
+        if len(starting_data) > 1:
+            self.run(starting_data)
         # These are currently unused
         # self.printing = False  # Variable to track if printing in functions, not currently used
         # self.converged = False  # when model converges or fitted, it is True
@@ -431,7 +443,7 @@ def generate_sample_data():
     return [data, starting_mus, sigmas, starting_correspondences, count/num_vectors]
 
 # Function called to run the GMM
-def main():
+def main_2():
     # Generate some data
     data = generate_sample_data()
     data_stream = data[0]
@@ -484,5 +496,202 @@ def main():
     print("The Predictions are: ")
     print(igmm.get_classification_array())
     igmm.plot()
+
+
+def main():
+    df = pandas.read_csv('schem_o365users_2.19-3.01.csv')
+    data = np.array([df['rem_latitude: Descending'], df['rem_longitude: Descending']])
+    data = np.transpose(data)
+    df = pandas.read_csv('schem_o365users_3.01-3.15.csv')
+    data_2 = np.array([df['rem_latitude: Descending'], df['rem_longitude: Descending']])
+    data_2 = np.transpose(data_2)
+    data = np.append(data, data_2, 0)
+    print(np.shape(data))
+    df = pandas.read_csv('schem_o365users_3.15-4.01.csv')
+    data_3 = np.array([df['rem_latitude: Descending'], df['rem_longitude: Descending']])
+    data_3 = np.transpose(data_3)
+    data = np.append(data, data_3, 0)
+
+    data[:, 0] += 90
+    data[:, 0] *= 1 / 18
+    data[:, 1] += 180
+    data[:, 1] *= 1 / 36
+
+    igmm = IncrementalGMM(data[0, 0], data[0, 1], starting_data=data[1:600])
+    print(igmm.get_state())
+    igmm.run(data[600:])
+    print(igmm.get_state())
+
+    plot_results(igmm.K, igmm.mus.copy(), igmm.corresponding_data.copy())
+
+    for i in range(igmm.K):
+        print("{} th cluster has {} points".format(i, len(igmm.corresponding_data[i])))
+
+    print(len(igmm.unclassified_points))
+    new_mus = np.copy(igmm.mus)
+    new_sigmas = igmm.alphas.copy()
+    for i in range(igmm.K):
+        new_sigmas[i] = np.linalg.inv((new_sigmas[i]))
+        new_sigmas[i][0,0] *= 18
+        new_sigmas[i][0,1] *= 18 * 36
+        new_sigmas[i][1,0] *= 18 * 36
+        new_sigmas[i][1,1] *= 36
+    print(new_mus)
+    print(new_sigmas)
+
+
+def plot_results(K, mus, corresponding_data):
+    colors = ['r', 'b', 'y', 'k', 'm', 'c']
+    for i in range(K):
+        mus[i][0] *= 18
+        mus[i][0] += -90
+        mus[i][1] *= 36
+        mus[i][1] += -180
+        corresponding_data[i][:,0] *= 18
+        corresponding_data[i][:, 0] += -90
+        corresponding_data[i][:, 1] *= 36
+        corresponding_data[i][:, 1] += -180
+    # for i in range(K):
+    #     plot.figure(1)
+    #     plot.scatter(corresponding_data[i][:, 1], corresponding_data[i][:, 0], c=colors[i % 6])
+    #     plot.scatter((mus[i][1]), (mus[i][0]), c='g')
+    # for i in range(K):
+    #     plot.figure(i+2)
+    #     plot.scatter(corresponding_data[i][:, 1], corresponding_data[i][:, 0], c=colors[i % 6])
+    #     plot.scatter((mus[i][1]), (mus[i][0]), c='g')
+    for i in range(K):
+        plot.figure(1)
+        plt.axis([-180, 180, -90, 90])
+        plot.scatter(corresponding_data[i][:, 1], corresponding_data[i][:, 0], c=colors[i % 6])
+        plot.scatter((mus[i][1]), (mus[i][0]), c='g')
+    for i in range(K):
+        plot.figure(i + 3)
+        plt.axis([-180, 180, -90, 90])
+        plot.scatter(corresponding_data[i][:, 1], corresponding_data[i][:, 0], c=colors[i % 6])
+        plot.scatter((mus[i][1]), (mus[i][0]), c='g')
+    plot.show()
+
+
+
+"""
+Functions from cluster_debug_apr28.ipynb
+"""
+
+
+def get_width_height_angle(covs, nstd=3):
+    """
+    Returns ellipse width, height, angle.
+
+    Scaled by the factor nstd.
+    """
+
+    def eigsorted(cov):
+        vals, vecs = np.linalg.eigh(cov)
+        order = vals.argsort()[::-1]
+        return vals[order], vecs[:, order]
+
+    vals, vecs = eigsorted(covs)
+    angle = np.degrees(np.arctan2(*vecs[:, 0][::-1]))
+    # Width and height are "full" widths, not radius
+    width, height = 2 * nstd * np.sqrt(vals)
+
+    return width, height, angle
+
+#main()
+def normalize_points(points_2D, scaler):
+    '''
+    Normalize cluster (x, y) array into real world map scale.
+    '''
+    dummy_columns = np.zeros((points_2D[0].shape[0], 2), dtype=float)
+    rotated_clusters_np = np.array(points_2D)
+    N = len(points_2D)
+    normalized_points = []
+    for i in range(N):
+        # dummy 2D columns horizontal stack because scaler dimension is 4D
+        cluster_reformed = np.hstack((dummy_columns, rotated_clusters_np[i]))
+        cluster_unscaled = scaler.inverse_transform(cluster_reformed)
+        cluster_unscaled_2D = cluster_unscaled[:, 2:]
+        normalized_points.append(cluster_unscaled_2D.tolist())
+    return normalized_points
+
+
+def plot_clusters(normalized_cluster_points, cluster_covs_2D, cluster_means_unscaled_2D, mapit):
+    '''
+    Plots cluster ellipses. Maximum 10 clusters (if more then define more collors)
+
+    Input:
+        normalized_cluster_points - ellipse countour location unscaled in real (lat, lon) array format.
+        mapit - folium Map object
+    Return:
+        mapit - folium Map object with cluster ellipses..
+    '''
+    N = len(normalized_cluster_points)
+    colors = ['red', 'blue', 'green', 'yellow', 'magenta', 'cyan', 'peru', 'pink', 'teal', 'olive']
+
+    for i in range(N):
+        folium_poly = normalized_cluster_points[i]
+        stds = np.diag(cluster_covs_2D[i])
+        means = cluster_means_unscaled_2D[i]
+        print("Cluster Id: ", i)
+        print("Means: ", means)
+        print("Stds: ", stds)
+        print('--------------------------')
+
+        html = f"""<div style="font-family: arial">
+                   Cluster id:  {str(i)} <br>
+                   Color: {str(colors[i])} <br>
+                   Means: {str(means)} <br>
+                   Stds: {str(stds)}
+                   </div>
+                """
+
+        iframe = folium.IFrame(html,
+                               width=200,
+                               height=200)
+
+        popup = folium.Popup(iframe,
+                             max_width=250)
+
+        folium.Polygon(folium_poly, fill_color=colors[i],
+                       popup=popup).add_to(mapit)
+    return mapit
+
+
+def get_vertices_ellipse(cluster_means_2D, cluster_covs_2D, nstd=3):
+    '''
+    Get vertices for all 10(or less) ellipses goven means 2D and covs 2D
+
+    Maximum 10 clusters.
+    '''
+    cluster_verts = []
+
+    colors = ['red', 'blue', 'green', 'yellow', 'magenta', 'cyan', 'peru', 'pink', 'teal', 'olive']
+
+    N = len(cluster_means_2D)
+
+    for i in range(N):
+        center_x, center_y = cluster_means_2D[i]
+        width, height, angle = get_width_height_angle(cluster_covs_2D[i], nstd)
+        ellipse = Ellipse(xy=(center_x, center_y), width=width, height=height,
+                          alpha=0.5, color=colors[i], angle=angle)
+
+        vertices = ellipse.get_verts()
+        cluster_verts.append(np.array(vertices))
+    return cluster_verts
+
+
+def plot_on_map(cluster_means_2D, cluster_covs_2D, cluster_means_unscaled_2D):
+    scaler = MinMaxScaler()
+    cluster_means_2D = scaler.transform(cluster_means_unscaled_2D)
+    #scaler.scale_()
+    # scaler.scale = feat_scales
+    # scaler.min = feat_mins
+
+    cluster_verts = get_vertices_ellipse(cluster_means_2D, cluster_covs_2D, nstd = 1)
+    normalized_verts = normalize_points(cluster_verts, scaler)
+
+    mapit = folium.Map()
+    mapit_clusters = plot_clusters(normalized_verts, cluster_covs_2D, cluster_means_unscaled_2D, mapit)
+
 
 main()
